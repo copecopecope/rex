@@ -16,6 +16,8 @@ base_url = "https://rexwordpuzzle.blogspot.com/feeds/posts/default"
 
 archive_dir = "archive"
 
+DEBUG_CONTENT = True
+
 @dataclass
 class Entry:
 	author: str
@@ -60,6 +62,8 @@ def parse(entry):
 	comments = parse_comments(entry)
 	date = parse_date(entry)
 
+	pprint(entry)
+
 	return Entry(author=author, content=content, comments=comments, date=date)
 
 def get_entries(res):
@@ -90,7 +94,6 @@ def save_local(year, month, entries):
 def load(year, month):
 	local_entries = load_local(year, month)
 	if local_entries is not None:
-		local_entries[0].print()
 		return local_entries
 
 	start = datetime(year, month, 1, 0, 0, 0)
@@ -100,12 +103,12 @@ def load(year, month):
 		"updated-min": start.isoformat(),
 		"updated-max": end.isoformat(),
 		"orderby": "updated",
-		"max-results": 31, # todo
+		"max-results": 2, # todo
 		"alt": "json"
 	}
 
 	res = requests.get(base_url, params=params)
-	entries = [parse(entry) for entry in get_entries(res.json())]
+	entries = reversed([parse(entry) for entry in get_entries(res.json())])
 
 	save_local(year, month, entries)
 
@@ -230,7 +233,8 @@ def console(stdscr, entries):
 '''
 todo:
 1. fetch all entries for a given month
-1. parse date
+1. parse date**
+1. skip!
 2. interactive rate 1-5
 3. store ratings in csv file
 4. on re-rate, load csv if avail so doesn't overwrite
@@ -246,6 +250,7 @@ if __name__ == "__main__":
 
 	entries = load(args.year, args.month)
 
-	curses.wrapper(console, entries)
+	if not DEBUG_CONTENT:
+		curses.wrapper(console, entries)
 
 
