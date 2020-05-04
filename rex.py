@@ -2,7 +2,7 @@
 
 import argparse, requests, re, csv
 import os, subprocess, curses
-import itertools
+import itertools, dateparser
 
 from math import floor
 from calendar import monthrange
@@ -16,7 +16,10 @@ base_url = "https://rexwordpuzzle.blogspot.com/feeds/posts/default"
 
 archive_dir = "archive"
 
-DEBUG_CONTENT = True
+DEBUG_CONTENT = False
+
+RE_SHORT = re.compile(r"(MON|TUE|WED|THU|FRI|SAT|SUN) (\d{1,2}-\d{1,2}-\d{1,2})", flags=re.I)
+RE_LONG = re.compile(r"(Mon\.?(day)?|Tue\.?(s\.?(day)?)?|Wed\.?(nesday)?|Thu\.?((rs)\.?(day)?)?|Fri\.?(day)?|Sat\.?(urday)?|Sun\.?(day)?),? (\w{3,12}\.? \d{1,2}(,|\.) 20\d{2})", flags=re.I)
 
 @dataclass
 class Entry:
@@ -25,6 +28,7 @@ class Entry:
 	comments: int
 	date: datetime
 	rating: int = 0
+	skip: bool = False
 
 	def write(self, f): 
 		writer = csv.writer(f)
@@ -53,7 +57,18 @@ def parse_comments(entry):
 	return int(m.group(1))
 
 def parse_date(entry):
-	#todo: extract from title if possible
+	# extract from title if possible
+	title = entry['title']['$t']
+	
+	m_short = RE_SHORT.search(title)
+	if m_short is not None:
+		return dateparser.parse(m_short.group(2))
+
+	m_long = RE_LONG.search(title)
+	if m_long is not None:
+		return dateparser.parse(m_long.group(12))
+
+	print("Default to created at...")
 	return datetime.fromisoformat(entry['published']['$t'])
 
 def parse(entry):
@@ -62,7 +77,7 @@ def parse(entry):
 	comments = parse_comments(entry)
 	date = parse_date(entry)
 
-	pprint(entry)
+	print(entry['title']['$t'], date)
 
 	return Entry(author=author, content=content, comments=comments, date=date)
 
@@ -103,7 +118,7 @@ def load(year, month):
 		"updated-min": start.isoformat(),
 		"updated-max": end.isoformat(),
 		"orderby": "updated",
-		"max-results": 2, # todo
+		"max-results": 50, # todo
 		"alt": "json"
 	}
 
@@ -117,6 +132,9 @@ def load(year, month):
 def add_string(window, string, mode=0, x_offset=0):
 	y, x = window.getyx()
 	_, width = window.getmaxyx()
+
+	if len(string) == 0:
+		return
 
 	split_strs = list(itertools.chain.from_iterable(zip(string.split(), itertools.repeat(' '))))[:-1]
 	if string[-1].isspace():
@@ -183,8 +201,10 @@ def render_entry(pad, entry, height, width, y_offset):
 def render_rating(window, entry):
 	window.clear()
 
-	window.addstr("Rating (1-5): ", curses.color_pair(3))
-	if entry.rating > 0: 
+	window.addstr("Rating (1-5) (s to skip): ", curses.color_pair(3))
+	if entry.skip is True:
+		window.addstr("skip", curses.color_pair(2))
+	elif entry.rating > 0: 
 		window.addstr(str(entry.rating))
 
 	window.refresh()
@@ -217,8 +237,10 @@ def console(stdscr, entries):
 		c = stdscr.getch()
 		if c == ord("p"):
 			index = max(0, index-1)
-		if c == ord("n"):
+		if c == ord("n") or c == curses.KEY_ENTER or c == 10: # \n
 			index = min(len(entries)-1, index+1)
+		if c == ord("s"):
+			entry.skip = True
 		if ord("1") <= c <= ord("5"):
 			entry.rating = int(chr(c))
 		if c == curses.KEY_DOWN:
@@ -232,8 +254,6 @@ def console(stdscr, entries):
 
 '''
 todo:
-1. fetch all entries for a given month
-1. parse date**
 1. skip!
 2. interactive rate 1-5
 3. store ratings in csv file
