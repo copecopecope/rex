@@ -21,6 +21,8 @@ DEBUG_CONTENT = False
 RE_SHORT = re.compile(r"(MON|TUE|WED|THU|FRI|SAT|SUN) (\d{1,2}-\d{1,2}-\d{1,2})", flags=re.I)
 RE_LONG = re.compile(r"(Mon\.?(day)?|Tue\.?(s\.?(day)?)?|Wed\.?(nesday)?|Thu\.?((rs)\.?(day)?)?|Fri\.?(day)?|Sat\.?(urday)?|Sun\.?(day)?),? (\w{3,12}\.? \d{1,2}(,|\.) 20\d{2})", flags=re.I)
 
+ENTRY_FIELDS = ["author", "content", "comments", "date", "rating", "skip"]
+
 @dataclass
 class Entry:
 	author: str
@@ -31,14 +33,29 @@ class Entry:
 	skip: bool = False
 
 	def write(self, f): 
-		writer = csv.writer(f)
-		writer.writerow([self.author, self.content, self.comments, self.date])
+		writer = csv.DictWriter(f, fieldnames=ENTRY_FIELDS)
+		writer.writeheader()
+		writer.writerow({
+			'author': self.author, 
+			'content': self.content, 
+			'comments': self.comments, 
+			'date': self.date,
+			'rating': self.rating,
+			'skip': self.skip
+		})
 
 	@staticmethod
 	def read(f):
-		reader = csv.reader(f)
+		reader = csv.DictReader(f)
 		row = reader.__next__()
-		return Entry(author=row[0], content=row[1], comments=row[2], date=datetime.fromisoformat(row[3]))
+		return Entry(
+			author=row['author'], 
+			content=row['content'], 
+			comments=int(row['comments']), 
+			date=datetime.fromisoformat(row['date']),
+			rating=int(row['rating']),
+			skip=row['skip'] == "True"
+		)
 
 	def print(self):
 		soup = BeautifulSoup(self.content, 'html.parser')
@@ -50,6 +67,9 @@ class Entry:
 				print(Style.RESET_ALL)
 			else:
 				print(str(child).replace(" ", "#"))
+
+	def __lt__(self, other):
+		return self.date < other.date
 
 def parse_comments(entry):
 	r = r"(\d+) Comments"
@@ -68,14 +88,18 @@ def parse_date(entry):
 	if m_long is not None:
 		return dateparser.parse(m_long.group(12))
 
-	print("Default to created at...")
-	return datetime.fromisoformat(entry['published']['$t'])
+	## assume some garbage non-review
+	return None
 
 def parse(entry):
 	author = entry['author'][0]['name']['$t']
 	content = entry['content']['$t']
 	comments = parse_comments(entry)
 	date = parse_date(entry)
+
+	if date is None:
+		# skip, assume some dumb non-review
+		return None
 
 	print(entry['title']['$t'], date)
 
@@ -92,9 +116,11 @@ def load_local(year, month):
 	entries = []
 	for fname in os.listdir(dir_path):
 		with open(os.path.join(dir_path, fname), 'r') as f:
-			entries.append(Entry.read(f))
+			entry = Entry.read(f)
+			if entry is not None:
+				entries.append(entry)
 
-	return entries
+	return sorted(entries)
 
 def save_local(year, month, entries):
 	dir_path = os.path.join(archive_dir, str(year), str(month))
@@ -118,14 +144,12 @@ def load(year, month):
 		"updated-min": start.isoformat(),
 		"updated-max": end.isoformat(),
 		"orderby": "updated",
-		"max-results": 50, # todo
+		"max-results": 50,
 		"alt": "json"
 	}
 
 	res = requests.get(base_url, params=params)
-	entries = reversed([parse(entry) for entry in get_entries(res.json())])
-
-	save_local(year, month, entries)
+	entries = sorted(filter(lambda x: x is not None, [parse(entry) for entry in get_entries(res.json())]))
 
 	return entries
 
@@ -247,6 +271,8 @@ def console(stdscr, entries):
 			y_offset += 1
 		if c == curses.KEY_UP:
 			y_offset = max(y_offset-1, 0)
+		if c == ord("q"):
+			return
 
 		if old_index != index:
 			y_offset = 0
@@ -254,15 +280,14 @@ def console(stdscr, entries):
 
 '''
 todo:
-1. skip!
-2. interactive rate 1-5
+1. sort
 3. store ratings in csv file
 4. on re-rate, load csv if avail so doesn't overwrite
 '''
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description = "Rex Parker data miner")
-	parser.add_argument('year', type=int)
+	parser.add_argument('year', type=int, choices=range(2007, 2021))
 	parser.add_argument('month', type=int, choices=range(1, 13))
 	args = parser.parse_args()
 
@@ -272,5 +297,10 @@ if __name__ == "__main__":
 
 	if not DEBUG_CONTENT:
 		curses.wrapper(console, entries)
+
+	print('Saving...')
+	save_local(args.year, args.month, entries)
+
+
 
 
