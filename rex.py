@@ -40,6 +40,7 @@ class Entry:
 			if isinstance(child, Tag):
 				print(Fore.RED + child.name)
 				print(str(child.string).replace(" ", "#"))
+				print(child.contents)
 				print(Style.RESET_ALL)
 			else:
 				print(str(child).replace(" ", "#"))
@@ -89,7 +90,7 @@ def save_local(year, month, entries):
 def load(year, month):
 	local_entries = load_local(year, month)
 	if local_entries is not None:
-		# local_entries[0].print()
+		local_entries[0].print()
 		return local_entries
 
 	start = datetime(year, month, 1, 0, 0, 0)
@@ -99,7 +100,7 @@ def load(year, month):
 		"updated-min": start.isoformat(),
 		"updated-max": end.isoformat(),
 		"orderby": "updated",
-		"max-results": 1, # todo
+		"max-results": 31, # todo
 		"alt": "json"
 	}
 
@@ -110,7 +111,7 @@ def load(year, month):
 
 	return entries
 
-def add_string(window, string, mode):
+def add_string(window, string, mode=0, x_offset=0):
 	y, x = window.getyx()
 	_, width = window.getmaxyx()
 
@@ -124,44 +125,57 @@ def add_string(window, string, mode):
 		if x + len(split_str) < width:
 			window.addstr(split_str, mode)
 		else:
-			# assume never exceeds window height
-			window.addstr(y+1, 0, split_str, mode)
+			window.addstr(y+1, x_offset, split_str, mode)
 		y, x = window.getyx()
 
-def render_entry(window, entry):
-	window.clear()
+def render_entry(pad, entry, height, width, y_offset):
+	pad.clear()
 
 	author_label = "Author: "
-	window.addstr(0, 0, author_label, curses.color_pair(3))
-	window.addstr(entry.author)
+	pad.addstr(0, 0, author_label, curses.color_pair(3))
+	pad.addstr(entry.author)
 
 	date_label = "Date: "
-	window.addstr(1, 0, date_label, curses.color_pair(3))
-	window.addstr(entry.date.strftime("%A %b %-d, %Y"))
+	pad.addstr(1, 0, date_label, curses.color_pair(3))
+	pad.addstr(entry.date.strftime("%A %b %-d, %Y"))
 
 	soup = BeautifulSoup(entry.content, 'html.parser')
-	window.move(3, 0)
+	pad.move(3, 0)
 
 	num_brs = 0
 	for child in soup.children:
-		y, x = window.getyx()
+		y, x = pad.getyx()
 		if isinstance(child, Tag):
 			if child.name == "br":
 				num_brs += 1
 				if num_brs <= 2:
-					window.move(y+1, 0)
+					pad.move(y+1, 0)
 			else:
 				num_brs = 0
 				if child.name == "b":
-					add_string(window, "".join(list(child.strings)), curses.A_BOLD | curses.color_pair(2))
+					add_string(pad, "".join(list(child.strings)), curses.A_BOLD | curses.color_pair(2))
 				if child.name == "span":
-					add_string(window, "".join(list(child.strings)), curses.color_pair(1))
+					add_string(pad, "".join(list(child.strings)), curses.color_pair(1))
+				if child.name == "ul":
+					for item in child.children:
+						y, x = pad.getyx()
+						pad.move(y+1, 0)
+						add_string(pad, "".join(["- "] + list(item.strings)), curses.color_pair(3))
+						y, x = pad.getyx()
+						pad.move(y+1, x)
+					pad.move(y+2, x)
+				if child.name == "blockquote":
+					pad.move(y, 3)
+					add_string(pad, "".join(list(child.strings)), curses.color_pair(3), x_offset=3)
+					y, x = pad.getyx()
+					pad.move(y+2, 0)
+
 		else:
 			num_brs = 0
 			child_str = str(child)
-			add_string(window, child_str, 0)
+			add_string(pad, child_str, 0)
 
-	window.refresh()
+	pad.refresh(y_offset, 0, 1, 1, height, width)
 
 def render_rating(window, entry):
 	window.clear()
@@ -178,19 +192,23 @@ def console(stdscr, entries):
 
 	curses.init_pair(1, curses.COLOR_YELLOW, curses.COLOR_BLACK)
 	curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
-	curses.init_color(100, 70, 70, 70)
-	curses.init_pair(3, 100, curses.COLOR_BLACK)
+	curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)
 
 	w_margin = 2
-	h_margin = 3
-	entry_window = curses.newwin(height-h_margin, width-w_margin, 1, 1)
+	h_margin = 5
+	pad_width=width-w_margin
+	pad_height=height-h_margin
 
-	rating_window = curses.newwin(h_margin-1, width-w_margin, 1+height-h_margin, 1)
+	entry_pad = curses.newpad(1000, pad_width)
+
+	rating_window = curses.newwin(2, pad_width, height-2, 1)
 
 	index = 0
+	y_offset = 0
 	while True:
+		old_index = index
 		entry = entries[index]
-		render_entry(entry_window, entry)
+		render_entry(entry_pad, entry, pad_height, pad_width, y_offset)
 		render_rating(rating_window, entry)
 
 		c = stdscr.getch()
@@ -200,11 +218,19 @@ def console(stdscr, entries):
 			index = min(len(entries)-1, index+1)
 		if ord("1") <= c <= ord("5"):
 			entry.rating = int(chr(c))
+		if c == curses.KEY_DOWN:
+			y_offset += 1
+		if c == curses.KEY_UP:
+			y_offset = max(y_offset-1, 0)
+
+		if old_index != index:
+			y_offset = 0
 
 
 '''
 todo:
 1. fetch all entries for a given month
+1. parse date
 2. interactive rate 1-5
 3. store ratings in csv file
 4. on re-rate, load csv if avail so doesn't overwrite
